@@ -1,0 +1,50 @@
+name: CI
+on: [push, pull_request]
+
+jobs:
+  fmt:    
+    runs-on: ubuntu-latest
+    container:
+      image: rust:latest
+    steps:
+      - name: Install rustfmt
+        run: rustup component add rustfmt
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Check formatting
+        run: cargo fmt --check
+  
+  test:
+    runs-on: ubuntu-latest
+    container:
+      image: rust:latest
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Run tests
+        run: cargo test --workspace
+
+  check:
+    runs-on: ubuntu-latest
+    container:
+      image: rust:latest
+    env:
+      RUSTFLAGS: -Dwarnings
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Run check
+        run: cargo check --workspace --all-targets
+
+  clippy:
+    runs-on: ubuntu-latest
+    container:
+      image: rust:latest
+    steps:
+      - name: Install clippy
+        run: rustup component add clippy
+      - name: Check out code
+        uses: actions/checkout@v4
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets -- -Dclippy::all -Dclippy::pedantic
+
