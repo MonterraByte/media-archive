@@ -1,0 +1,14 @@
+[package]
+name = "media-archived"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+axum = { workspace = true }
+clap = { workspace = true }
+media-archive = { path = "../media-archive" }
+sqlx = { workspace = true, features = ["macros", "migrate", "runtime-tokio", "tls-rustls", "sqlite"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt", "rt-multi-thread", "macros"] }
+tracing = { workspace = true }
+tracing-subscriber = { version = "0.3", features = ["parking_lot", "time"] }

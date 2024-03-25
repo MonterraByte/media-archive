@@ -1,3 +1,13 @@
 [workspace]
 resolver = "2"
-members = ["media-archive"]
+members = ["media-archive", "media-archived"]
+
+[workspace.dependencies]
+axum = "0.7"
+clap = { version = "4", features = ["derive"] }
+#serde = "1"
+sqlx = "0.7"
+thiserror = "1"
+tokio = "1"
+tracing = "0.1"
+#vec1 = "1"
