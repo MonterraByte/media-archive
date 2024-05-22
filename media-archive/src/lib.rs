@@ -14,3 +14,39 @@
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
 #![forbid(unsafe_code)]
+
+use std::fs;
+use std::io;
+use std::path::PathBuf;
+
+use thiserror::Error;
+
+const MEDIA_ARCHIVE_DIRECTORY: &str = ".media-archive";
+
+#[derive(Debug)]
+pub struct MediaArchive {
+    archive_path: PathBuf,
+    deploy_path: PathBuf,
+}
+
+impl MediaArchive {
+    /// Opens a directory as a media archive.
+    ///
+    /// The directory will be created if it doesn't already exist,
+    /// and so will any needed media archive files.
+    pub fn open(path: PathBuf) -> Result<Self, OpenMediaArchiveError> {
+        let archive_path = path.join(MEDIA_ARCHIVE_DIRECTORY);
+        fs::create_dir_all(&archive_path).map_err(OpenMediaArchiveError::CreateDir)?;
+
+        Ok(Self {
+            archive_path,
+            deploy_path: path,
+        })
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum OpenMediaArchiveError {
+    #[error("failed to create base directory: {0}")]
+    CreateDir(#[source] io::Error),
+}
