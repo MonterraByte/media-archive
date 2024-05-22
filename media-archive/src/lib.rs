@@ -26,7 +26,7 @@ const MEDIA_ARCHIVE_DIRECTORY: &str = ".media-archive";
 #[derive(Debug)]
 pub struct MediaArchive {
     archive_path: PathBuf,
-    deploy_path: PathBuf,
+    deploy_path: Option<PathBuf>,
 }
 
 impl MediaArchive {
@@ -34,13 +34,22 @@ impl MediaArchive {
     ///
     /// The directory will be created if it doesn't already exist,
     /// and so will any needed media archive files.
-    pub fn open(path: PathBuf) -> Result<Self, OpenMediaArchiveError> {
-        let archive_path = path.join(MEDIA_ARCHIVE_DIRECTORY);
+    ///
+    /// By default, an archive directory will be created inside `path`,
+    /// and `path` will be the directory where media files are deployed to.
+    /// If `bare` is true, no media files will be deployed, and `path`
+    /// will be treated as the archive directory (similar to Git's bare repositories).
+    pub fn open(path: PathBuf, bare: bool) -> Result<Self, OpenMediaArchiveError> {
+        let (archive_path, deploy_path) = if bare {
+            (path, None)
+        } else {
+            (path.join(MEDIA_ARCHIVE_DIRECTORY), Some(path))
+        };
         fs::create_dir_all(&archive_path).map_err(OpenMediaArchiveError::CreateDir)?;
 
         Ok(Self {
             archive_path,
-            deploy_path: path,
+            deploy_path,
         })
     }
 }
