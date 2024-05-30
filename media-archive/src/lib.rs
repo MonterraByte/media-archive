@@ -22,6 +22,10 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 const MEDIA_ARCHIVE_DIRECTORY: &str = ".media-archive";
+const STORE_DIRECTORY: &str = "store";
+
+const HASH_HEX_LEN: usize = blake3::OUT_LEN * 2;
+type HashString = arrayvec::ArrayString<HASH_HEX_LEN>;
 
 #[derive(Debug)]
 pub struct MediaArchive {
@@ -52,10 +56,102 @@ impl MediaArchive {
             deploy_path,
         })
     }
+
+    /// Returns the path to a stored file from its hash.
+    ///
+    /// The file does not need to exist.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `hash` is not a hex-encoded Blake3 hash.
+    #[must_use]
+    fn get_path_of_stored_file(&self, hash: &str) -> PathBuf {
+        if hash.len() != HASH_HEX_LEN {
+            panic!(
+                "string is length {}, should be {}",
+                hash.len(),
+                HASH_HEX_LEN
+            );
+        }
+
+        for ch in hash.bytes() {
+            match ch {
+                b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F' => (),
+                other => panic!("string has non hex character '0x{:x}'", other),
+            }
+        }
+
+        let hash_lower = hash.to_ascii_lowercase();
+
+        const SUBDIR_NAME_LEN: usize = 2;
+        let subdir: &str = std::str::from_utf8(
+            hash_lower
+                .as_bytes()
+                .first_chunk::<SUBDIR_NAME_LEN>()
+                .expect("string is at least 2 bytes"),
+        )
+        .expect("string is ASCII");
+
+        let mut path = self.archive_path.clone();
+        path.push(STORE_DIRECTORY);
+        path.push(subdir);
+        path.push(hash_lower);
+        path
+    }
 }
 
 #[derive(Debug, Error)]
 pub enum OpenMediaArchiveError {
     #[error("failed to create base directory: {0}")]
     CreateDir(#[source] io::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_media_archive() -> MediaArchive {
+        MediaArchive {
+            archive_path: PathBuf::from("."),
+            deploy_path: None,
+        }
+    }
+
+    #[test]
+    fn path_of_stored_file() {
+        let archive = test_media_archive();
+
+        let hash = "0011223344556677889900aabbccddeeff0011223344556677889900aabbccdd";
+        let path = archive.get_path_of_stored_file(hash);
+        let expected: PathBuf = [".", STORE_DIRECTORY, "00", hash].iter().collect();
+        assert_eq!(path, expected);
+    }
+
+    #[test]
+    fn path_of_stored_file_uppercase() {
+        let archive = test_media_archive();
+
+        let hash = "0011223344556677889900AABBCCDDEEFF0011223344556677889900aabbccdd";
+        let path = archive.get_path_of_stored_file(hash);
+        let expected: PathBuf = [".", STORE_DIRECTORY, "00", &hash.to_ascii_lowercase()]
+            .iter()
+            .collect();
+        assert_eq!(path, expected);
+    }
+
+    #[should_panic]
+    #[test]
+    fn path_of_stored_file_length() {
+        let archive = test_media_archive();
+        let _ = archive.get_path_of_stored_file("001122");
+    }
+
+    #[should_panic]
+    #[test]
+    fn path_of_stored_file_non_hex() {
+        let archive = test_media_archive();
+        let _ = archive.get_path_of_stored_file(
+            "あxyz3344556677889900AABBCCDDEEFF0011223344556677889900aabbccdd",
+        );
+    }
 }
