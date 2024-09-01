@@ -68,11 +68,7 @@ impl MediaArchive {
     #[must_use]
     fn get_path_of_stored_file(&self, hash: &str) -> PathBuf {
         if hash.len() != HASH_HEX_LEN {
-            panic!(
-                "string is length {}, should be {}",
-                hash.len(),
-                HASH_HEX_LEN
-            );
+            panic!("string is length {}, should be {}", hash.len(), HASH_HEX_LEN);
         }
 
         for ch in hash.bytes() {
@@ -130,9 +126,7 @@ impl MediaArchive {
             return Err(StoreFileError::AlreadyExists(hash));
         }
 
-        let parent = target_path
-            .parent()
-            .expect("target path should have a parent");
+        let parent = target_path.parent().expect("target path should have a parent");
         fs::create_dir_all(parent).map_err(StoreFileError::CreateParentDir)?;
 
         if move_file {
@@ -215,8 +209,6 @@ mod tests {
     #[test]
     fn path_of_stored_file_non_hex() {
         let archive = test_media_archive();
-        let _ = archive.get_path_of_stored_file(
-            "あxyz3344556677889900AABBCCDDEEFF0011223344556677889900aabbccdd",
-        );
+        let _ = archive.get_path_of_stored_file("あxyz3344556677889900AABBCCDDEEFF0011223344556677889900aabbccdd");
     }
 }
