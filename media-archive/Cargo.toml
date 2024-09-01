@@ -6,4 +6,5 @@ edition = "2021"
 [dependencies]
 arrayvec = "0.7"
 blake3 = "1.5"
+reflink-copy = "0.1"
 thiserror = { workspace = true }

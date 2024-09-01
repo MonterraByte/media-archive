@@ -16,8 +16,9 @@
 #![forbid(unsafe_code)]
 
 use std::fs;
+use std::fs::File;
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use thiserror::Error;
 
@@ -98,12 +99,76 @@ impl MediaArchive {
         path.push(hash_lower);
         path
     }
+
+    /// Stores a file in the archive.
+    ///
+    /// Files in the archive are identified by their hash value, and this function will return
+    /// this value after storing the file.
+    ///
+    /// If `move_file` is true, the file is moved instead.
+    pub fn store_file(&self, path: &Path, move_file: bool) -> Result<HashString, StoreFileError> {
+        let metadata = path.symlink_metadata().map_err(StoreFileError::Metadata)?;
+        if metadata.is_dir() {
+            return Err(StoreFileError::IsDirectory);
+        }
+        if metadata.is_symlink() && move_file {
+            return Err(StoreFileError::IsSymlink);
+        }
+        if metadata.is_symlink() && path.metadata().map_err(StoreFileError::Metadata)?.is_dir() {
+            return Err(StoreFileError::IsDirectory);
+        }
+
+        let hash = {
+            let file = File::open(path).map_err(StoreFileError::Open)?;
+            let mut hasher = blake3::Hasher::new();
+            hasher.update_reader(file).map_err(StoreFileError::Read)?;
+            hasher.finalize().to_hex()
+        };
+
+        let target_path = self.get_path_of_stored_file(&hash);
+        if target_path.exists() {
+            return Err(StoreFileError::AlreadyExists(hash));
+        }
+
+        let parent = target_path
+            .parent()
+            .expect("target path should have a parent");
+        fs::create_dir_all(parent).map_err(StoreFileError::CreateParentDir)?;
+
+        if move_file {
+            fs::rename(path, target_path).map_err(StoreFileError::Store)?;
+        } else {
+            reflink_copy::reflink_or_copy(path, target_path).map_err(StoreFileError::Store)?;
+        }
+
+        Ok(hash)
+    }
 }
 
 #[derive(Debug, Error)]
 pub enum OpenMediaArchiveError {
     #[error("failed to create base directory: {0}")]
     CreateDir(#[source] io::Error),
+}
+
+#[derive(Debug, Error)]
+pub enum StoreFileError {
+    #[error("file with hash '{0}' already exists")]
+    AlreadyExists(HashString),
+    #[error("cannot store a directory")]
+    IsDirectory,
+    #[error("cannot store a symlink")]
+    IsSymlink,
+    #[error("failed to get file metadata: {0}")]
+    Metadata(#[source] io::Error),
+    #[error("failed to create parent directory: {0}")]
+    CreateParentDir(#[source] io::Error),
+    #[error("failed to open file for hashing: {0}")]
+    Open(#[source] io::Error),
+    #[error("failed to read file while hashing: {0}")]
+    Read(#[source] io::Error),
+    #[error("failed to store file: {0}")]
+    Store(#[source] io::Error),
 }
 
 #[cfg(test)]
