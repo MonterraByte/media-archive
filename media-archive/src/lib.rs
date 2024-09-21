@@ -18,7 +18,7 @@
 use std::fs;
 use std::fs::File;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use thiserror::Error;
 
@@ -137,6 +137,90 @@ impl MediaArchive {
 
         Ok(hash)
     }
+
+    /// Deploys a file with the given hash to a certain path in the deployment directory.
+    ///
+    /// `target_path` must be a valid relative path.
+    pub fn deploy_file(&self, hash: &HashString, target_path: &Path, method: DeployMethod) -> Result<(), DeployError> {
+        if target_path.is_absolute()
+            || target_path.components().any(|c| c == Component::ParentDir)
+            || target_path.components().next().is_none()
+            || !target_path.components().any(|c| c != Component::CurDir)
+        {
+            return Err(DeployError::InvalidPath(target_path.to_path_buf()));
+        }
+
+        let target_path = self
+            .deploy_path
+            .as_ref()
+            .ok_or(DeployError::IsBareArchive)?
+            .join(target_path);
+
+        match target_path.symlink_metadata() {
+            Ok(_) => return Err(DeployError::AlreadyExists(target_path)),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => (),
+            Err(err) => {
+                return Err(DeployError::Metadata {
+                    path: target_path,
+                    source: err,
+                })
+            }
+        }
+
+        let source_path = self.get_path_of_stored_file(hash);
+        match source_path.symlink_metadata() {
+            Ok(metadata) if !metadata.is_file() => {
+                return Err(DeployError::SourceExistsButIsNotAFile(source_path));
+            }
+            Ok(_) => (),
+            Err(err) => {
+                return Err(DeployError::Metadata {
+                    path: source_path,
+                    source: err,
+                })
+            }
+        }
+
+        let parent = target_path.parent().expect("target path should have a parent");
+        fs::create_dir_all(parent).map_err(DeployError::CreateParentDir)?;
+
+        let result = match method {
+            DeployMethod::Copy => reflink_copy::reflink_or_copy(&source_path, &target_path).and(Ok(())),
+            DeployMethod::Symlink => {
+                #[cfg(target_family = "unix")]
+                {
+                    std::os::unix::fs::symlink(&source_path, &target_path)
+                }
+                #[cfg(target_family = "windows")]
+                {
+                    std::os::windows::fs::symlink_file(&source_path, &target_path)
+                }
+                #[cfg(all(not(target_family = "windows"), not(target_family = "unix")))]
+                return Err(DeployError::NotSupported);
+            }
+            DeployMethod::Hardlink => fs::hard_link(&source_path, &target_path),
+        };
+
+        match result {
+            Ok(()) => Ok(()),
+            Err(err) if err.kind() == io::ErrorKind::Unsupported => Err(DeployError::NotSupported),
+            Err(err) => Err(DeployError::Deploy {
+                from: source_path,
+                to: target_path,
+                source: err,
+            }),
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug)]
+pub enum DeployMethod {
+    /// The file is copied to the destination.
+    Copy,
+    /// The file is symlinked to the destination.
+    Symlink,
+    /// The file is hardlinked to the destination.
+    Hardlink,
 }
 
 #[derive(Debug, Error)]
@@ -165,6 +249,32 @@ pub enum StoreFileError {
     Store(#[source] io::Error),
 }
 
+#[derive(Debug, Error)]
+pub enum DeployError {
+    #[error("'{0}' already exists")]
+    AlreadyExists(PathBuf),
+    #[error("failed to create parent directory: {0}")]
+    CreateParentDir(#[source] io::Error),
+    #[error("failed to deploy file '{from}' to '{to}': {source}")]
+    Deploy {
+        from: PathBuf,
+        to: PathBuf,
+        source: io::Error,
+    },
+    #[error("target path '{0}' is empty or not relative")]
+    InvalidPath(PathBuf),
+    #[error("cannot deploy in bare media archive")]
+    IsBareArchive,
+    #[error("failed to get file metadata of file '{path}': {source}")]
+    Metadata { path: PathBuf, source: io::Error },
+    #[error("file with hash '{0}' not found in the archive")]
+    NotFound(HashString),
+    #[error("deployment method not supported by the operating system or file system")]
+    NotSupported,
+    #[error("source '{0}' exists but is not a file")]
+    SourceExistsButIsNotAFile(PathBuf),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -173,6 +283,13 @@ mod tests {
         MediaArchive {
             archive_path: PathBuf::from("."),
             deploy_path: None,
+        }
+    }
+
+    fn test_non_bare_media_archive() -> MediaArchive {
+        MediaArchive {
+            archive_path: PathBuf::from("archive"),
+            deploy_path: Some(PathBuf::from("deploy")),
         }
     }
 
@@ -210,5 +327,58 @@ mod tests {
     fn path_of_stored_file_non_hex() {
         let archive = test_media_archive();
         let _ = archive.get_path_of_stored_file("あxyz3344556677889900AABBCCDDEEFF0011223344556677889900aabbccdd");
+    }
+
+    #[test]
+    fn deploy_path_bare_archive() {
+        let archive = test_media_archive();
+        assert!(matches!(
+            archive.deploy_file(&HashString::zero_filled(), Path::new("test"), DeployMethod::Copy),
+            Err(DeployError::IsBareArchive)
+        ));
+    }
+
+    #[test]
+    fn deploy_path_empty_path() {
+        let archive = test_non_bare_media_archive();
+        assert!(matches!(
+            archive.deploy_file(&HashString::zero_filled(), Path::new(""), DeployMethod::Copy),
+            Err(DeployError::InvalidPath(_))
+        ));
+    }
+
+    #[test]
+    fn deploy_path_absolute_path() {
+        let archive = test_non_bare_media_archive();
+        assert!(matches!(
+            archive.deploy_file(
+                &HashString::zero_filled(),
+                &std::path::absolute("test").unwrap(),
+                DeployMethod::Copy
+            ),
+            Err(DeployError::InvalidPath(_))
+        ));
+    }
+
+    #[test]
+    fn deploy_path_current_dir() {
+        let archive = test_non_bare_media_archive();
+        assert!(matches!(
+            archive.deploy_file(&HashString::zero_filled(), Path::new("."), DeployMethod::Copy),
+            Err(DeployError::InvalidPath(_))
+        ));
+    }
+
+    #[test]
+    fn deploy_path_escape() {
+        let archive = test_non_bare_media_archive();
+        assert!(matches!(
+            archive.deploy_file(
+                &HashString::zero_filled(),
+                Path::new("test/../../important-file"),
+                DeployMethod::Copy
+            ),
+            Err(DeployError::InvalidPath(_))
+        ));
     }
 }
