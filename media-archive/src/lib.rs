@@ -15,18 +15,19 @@
 
 #![forbid(unsafe_code)]
 
-use std::fs;
-use std::fs::File;
+mod file_hash;
+
+use std::fs::{self, File};
 use std::io;
 use std::path::{Component, Path, PathBuf};
 
+use prae::Wrapper;
 use thiserror::Error;
+
+pub use crate::file_hash::FileHash;
 
 const MEDIA_ARCHIVE_DIRECTORY: &str = ".media-archive";
 const STORE_DIRECTORY: &str = "store";
-
-const HASH_HEX_LEN: usize = blake3::OUT_LEN * 2;
-type HashString = arrayvec::ArrayString<HASH_HEX_LEN>;
 
 #[derive(Debug)]
 pub struct MediaArchive {
@@ -61,29 +62,11 @@ impl MediaArchive {
     /// Returns the path to a stored file from its hash.
     ///
     /// The file does not need to exist.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `hash` is not a hex-encoded Blake3 hash.
     #[must_use]
-    fn get_path_of_stored_file(&self, hash: &str) -> PathBuf {
-        if hash.len() != HASH_HEX_LEN {
-            panic!("string is length {}, should be {}", hash.len(), HASH_HEX_LEN);
-        }
-
-        for ch in hash.bytes() {
-            match ch {
-                b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F' => (),
-                other => panic!("string has non hex character '0x{:x}'", other),
-            }
-        }
-
-        let hash_lower = hash.to_ascii_lowercase();
-
+    fn get_path_of_stored_file(&self, hash: &FileHash) -> PathBuf {
         const SUBDIR_NAME_LEN: usize = 2;
         let subdir: &str = std::str::from_utf8(
-            hash_lower
-                .as_bytes()
+            hash.as_bytes()
                 .first_chunk::<SUBDIR_NAME_LEN>()
                 .expect("string is at least 2 bytes"),
         )
@@ -92,7 +75,7 @@ impl MediaArchive {
         let mut path = self.archive_path.clone();
         path.push(STORE_DIRECTORY);
         path.push(subdir);
-        path.push(hash_lower);
+        path.push::<&str>(hash.as_ref());
         path
     }
 
@@ -102,7 +85,7 @@ impl MediaArchive {
     /// this value after storing the file.
     ///
     /// If `move_file` is true, the file is moved instead.
-    pub fn store_file(&self, path: &Path, move_file: bool) -> Result<HashString, StoreFileError> {
+    pub fn store_file(&self, path: &Path, move_file: bool) -> Result<FileHash, StoreFileError> {
         let metadata = path.symlink_metadata().map_err(StoreFileError::Metadata)?;
         if metadata.is_dir() {
             return Err(StoreFileError::IsDirectory);
@@ -118,7 +101,7 @@ impl MediaArchive {
             let file = File::open(path).map_err(StoreFileError::Open)?;
             let mut hasher = blake3::Hasher::new();
             hasher.update_reader(file).map_err(StoreFileError::Read)?;
-            hasher.finalize().to_hex()
+            FileHash::new(hasher.finalize().to_hex()).expect("hash is a valid hash")
         };
 
         let target_path = self.get_path_of_stored_file(&hash);
@@ -141,7 +124,7 @@ impl MediaArchive {
     /// Deploys a file with the given hash to a certain path in the deployment directory.
     ///
     /// `target_path` must be a valid relative path.
-    pub fn deploy_file(&self, hash: &HashString, target_path: &Path, method: DeployMethod) -> Result<(), DeployError> {
+    pub fn deploy_file(&self, hash: &FileHash, target_path: &Path, method: DeployMethod) -> Result<(), DeployError> {
         if target_path.is_absolute()
             || target_path.components().any(|c| c == Component::ParentDir)
             || target_path.components().next().is_none()
@@ -232,7 +215,7 @@ pub enum OpenMediaArchiveError {
 #[derive(Debug, Error)]
 pub enum StoreFileError {
     #[error("file with hash '{0}' already exists")]
-    AlreadyExists(HashString),
+    AlreadyExists(FileHash),
     #[error("cannot store a directory")]
     IsDirectory,
     #[error("cannot store a symlink")]
@@ -268,7 +251,7 @@ pub enum DeployError {
     #[error("failed to get file metadata of file '{path}': {source}")]
     Metadata { path: PathBuf, source: io::Error },
     #[error("file with hash '{0}' not found in the archive")]
-    NotFound(HashString),
+    NotFound(FileHash),
     #[error("deployment method not supported by the operating system or file system")]
     NotSupported,
     #[error("source '{0}' exists but is not a file")]
@@ -278,6 +261,7 @@ pub enum DeployError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str::FromStr;
 
     fn test_media_archive() -> MediaArchive {
         MediaArchive {
@@ -294,46 +278,23 @@ mod tests {
     }
 
     #[test]
-    fn path_of_stored_file() {
+    fn path_of_stored_file() -> Result<(), file_hash::FromStrError> {
         let archive = test_media_archive();
 
-        let hash = "0011223344556677889900aabbccddeeff0011223344556677889900aabbccdd";
-        let path = archive.get_path_of_stored_file(hash);
-        let expected: PathBuf = [".", STORE_DIRECTORY, "00", hash].iter().collect();
+        let hash_str = "0011223344556677889900aabbccddeeff0011223344556677889900aabbccdd";
+        let hash = FileHash::from_str(hash_str)?;
+
+        let path = archive.get_path_of_stored_file(&hash);
+        let expected: PathBuf = [".", STORE_DIRECTORY, "00", hash_str].iter().collect();
         assert_eq!(path, expected);
-    }
-
-    #[test]
-    fn path_of_stored_file_uppercase() {
-        let archive = test_media_archive();
-
-        let hash = "0011223344556677889900AABBCCDDEEFF0011223344556677889900aabbccdd";
-        let path = archive.get_path_of_stored_file(hash);
-        let expected: PathBuf = [".", STORE_DIRECTORY, "00", &hash.to_ascii_lowercase()]
-            .iter()
-            .collect();
-        assert_eq!(path, expected);
-    }
-
-    #[should_panic]
-    #[test]
-    fn path_of_stored_file_length() {
-        let archive = test_media_archive();
-        let _ = archive.get_path_of_stored_file("001122");
-    }
-
-    #[should_panic]
-    #[test]
-    fn path_of_stored_file_non_hex() {
-        let archive = test_media_archive();
-        let _ = archive.get_path_of_stored_file("あxyz3344556677889900AABBCCDDEEFF0011223344556677889900aabbccdd");
+        Ok(())
     }
 
     #[test]
     fn deploy_path_bare_archive() {
         let archive = test_media_archive();
         assert!(matches!(
-            archive.deploy_file(&HashString::zero_filled(), Path::new("test"), DeployMethod::Copy),
+            archive.deploy_file(&FileHash::zero_filled(), Path::new("test"), DeployMethod::Copy),
             Err(DeployError::IsBareArchive)
         ));
     }
@@ -342,7 +303,7 @@ mod tests {
     fn deploy_path_empty_path() {
         let archive = test_non_bare_media_archive();
         assert!(matches!(
-            archive.deploy_file(&HashString::zero_filled(), Path::new(""), DeployMethod::Copy),
+            archive.deploy_file(&FileHash::zero_filled(), Path::new(""), DeployMethod::Copy),
             Err(DeployError::InvalidPath(_))
         ));
     }
@@ -352,7 +313,7 @@ mod tests {
         let archive = test_non_bare_media_archive();
         assert!(matches!(
             archive.deploy_file(
-                &HashString::zero_filled(),
+                &FileHash::zero_filled(),
                 &std::path::absolute("test").unwrap(),
                 DeployMethod::Copy
             ),
@@ -364,7 +325,7 @@ mod tests {
     fn deploy_path_current_dir() {
         let archive = test_non_bare_media_archive();
         assert!(matches!(
-            archive.deploy_file(&HashString::zero_filled(), Path::new("."), DeployMethod::Copy),
+            archive.deploy_file(&FileHash::zero_filled(), Path::new("."), DeployMethod::Copy),
             Err(DeployError::InvalidPath(_))
         ));
     }
@@ -374,7 +335,7 @@ mod tests {
         let archive = test_non_bare_media_archive();
         assert!(matches!(
             archive.deploy_file(
-                &HashString::zero_filled(),
+                &FileHash::zero_filled(),
                 Path::new("test/../../important-file"),
                 DeployMethod::Copy
             ),
