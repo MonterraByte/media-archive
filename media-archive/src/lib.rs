@@ -19,9 +19,10 @@ mod file_hash;
 
 use std::fs::{self, File};
 use std::io;
-use std::path::{Component, Path, PathBuf};
+use std::path::{Path, PathBuf};
 
 use prae::Wrapper;
+use relative_path::RelativePath;
 use thiserror::Error;
 
 pub use crate::file_hash::FileHash;
@@ -121,23 +122,21 @@ impl MediaArchive {
         Ok(hash)
     }
 
-    /// Deploys a file with the given hash to a certain path in the deployment directory.
+    /// Deploys a file with the given hash to the deployment directory.
     ///
-    /// `target_path` must be a valid relative path.
-    pub fn deploy_file(&self, hash: &FileHash, target_path: &Path, method: DeployMethod) -> Result<(), DeployError> {
-        if target_path.is_absolute()
-            || target_path.components().any(|c| c == Component::ParentDir)
-            || target_path.components().next().is_none()
-            || !target_path.components().any(|c| c != Component::CurDir)
-        {
-            return Err(DeployError::InvalidPath(target_path.to_path_buf()));
-        }
+    /// `target_path` is a relative path from the root of the deployment directory.
+    pub fn deploy_file(
+        &self,
+        hash: &FileHash,
+        target_path: &RelativePath,
+        method: DeployMethod,
+    ) -> Result<(), DeployError> {
+        let deploy_path = self.deploy_path.as_ref().ok_or(DeployError::IsBareArchive)?;
 
-        let target_path = self
-            .deploy_path
-            .as_ref()
-            .ok_or(DeployError::IsBareArchive)?
-            .join(target_path);
+        let target_path = target_path.to_logical_path(deploy_path);
+        if !target_path.starts_with(deploy_path) || &target_path == deploy_path {
+            return Err(DeployError::InvalidPath(target_path));
+        }
 
         match target_path.symlink_metadata() {
             Ok(_) => return Err(DeployError::AlreadyExists(target_path)),
@@ -294,7 +293,7 @@ mod tests {
     fn deploy_path_bare_archive() {
         let archive = test_media_archive();
         assert!(matches!(
-            archive.deploy_file(&FileHash::zero_filled(), Path::new("test"), DeployMethod::Copy),
+            archive.deploy_file(&FileHash::zero_filled(), RelativePath::new("test"), DeployMethod::Copy),
             Err(DeployError::IsBareArchive)
         ));
     }
@@ -303,20 +302,7 @@ mod tests {
     fn deploy_path_empty_path() {
         let archive = test_non_bare_media_archive();
         assert!(matches!(
-            archive.deploy_file(&FileHash::zero_filled(), Path::new(""), DeployMethod::Copy),
-            Err(DeployError::InvalidPath(_))
-        ));
-    }
-
-    #[test]
-    fn deploy_path_absolute_path() {
-        let archive = test_non_bare_media_archive();
-        assert!(matches!(
-            archive.deploy_file(
-                &FileHash::zero_filled(),
-                &std::path::absolute("test").unwrap(),
-                DeployMethod::Copy
-            ),
+            archive.deploy_file(&FileHash::zero_filled(), RelativePath::new(""), DeployMethod::Copy),
             Err(DeployError::InvalidPath(_))
         ));
     }
@@ -325,7 +311,7 @@ mod tests {
     fn deploy_path_current_dir() {
         let archive = test_non_bare_media_archive();
         assert!(matches!(
-            archive.deploy_file(&FileHash::zero_filled(), Path::new("."), DeployMethod::Copy),
+            archive.deploy_file(&FileHash::zero_filled(), RelativePath::new("."), DeployMethod::Copy),
             Err(DeployError::InvalidPath(_))
         ));
     }
@@ -336,7 +322,7 @@ mod tests {
         assert!(matches!(
             archive.deploy_file(
                 &FileHash::zero_filled(),
-                Path::new("test/../../important-file"),
+                RelativePath::new("test/../../important-file"),
                 DeployMethod::Copy
             ),
             Err(DeployError::InvalidPath(_))
