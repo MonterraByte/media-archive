@@ -21,6 +21,8 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v4
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
       - name: Run tests
         run: cargo test --workspace
 
@@ -33,6 +35,8 @@ jobs:
     steps:
       - name: Check out code
         uses: actions/checkout@v4
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
       - name: Run check
         run: cargo check --workspace --all-targets
 
@@ -45,5 +49,7 @@ jobs:
         run: rustup component add clippy
       - name: Check out code
         uses: actions/checkout@v4
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@v2
       - name: Run clippy
         run: cargo clippy --workspace --all-targets -- -Dclippy::all -Dclippy::pedantic -Aclippy::missing_errors_doc
