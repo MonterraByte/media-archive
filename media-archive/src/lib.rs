@@ -22,7 +22,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use prae::Wrapper;
-use relative_path::{RelativePath, RelativePathBuf};
+use relative_path::{PathExt, RelativePath, RelativePathBuf};
 use thiserror::Error;
 
 pub use crate::file_hash::FileHash;
@@ -172,13 +172,25 @@ impl MediaArchive {
         let result = match method {
             DeployMethod::Copy => reflink_copy::reflink_or_copy(&source_path, &target_path).and(Ok(())),
             DeployMethod::Symlink => {
-                #[cfg(target_family = "unix")]
+                #[cfg(any(target_family = "windows", target_family = "unix"))]
                 {
-                    std::os::unix::fs::symlink(&source_path, &target_path)
-                }
-                #[cfg(target_family = "windows")]
-                {
-                    std::os::windows::fs::symlink_file(&source_path, &target_path)
+                    let relative_source_path = source_path
+                        .relative_to(parent)
+                        .map_err(|source| DeployError::SymlinkRelativePathConstruction {
+                            source_path: source_path.clone(),
+                            target_parent: parent.to_owned(),
+                            source,
+                        })?
+                        .to_path("");
+
+                    #[cfg(target_family = "unix")]
+                    {
+                        std::os::unix::fs::symlink(&relative_source_path, &target_path)
+                    }
+                    #[cfg(target_family = "windows")]
+                    {
+                        std::os::windows::fs::symlink_file(&relative_source_path, &target_path)
+                    }
                 }
                 #[cfg(all(not(target_family = "windows"), not(target_family = "unix")))]
                 return Err(DeployError::NotSupported);
@@ -258,6 +270,12 @@ pub enum DeployError {
     NotSupported,
     #[error("source '{0}' exists but is not a file")]
     SourceExistsButIsNotAFile(PathBuf),
+    #[error("failed to construct relative path from the symlink target to its source")]
+    SymlinkRelativePathConstruction {
+        source_path: PathBuf,
+        target_parent: PathBuf,
+        source: relative_path::RelativeToError,
+    },
 }
 
 #[cfg(test)]
