@@ -22,7 +22,7 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use prae::Wrapper;
-use relative_path::RelativePath;
+use relative_path::{RelativePath, RelativePathBuf};
 use thiserror::Error;
 
 pub use crate::file_hash::FileHash;
@@ -133,10 +133,13 @@ impl MediaArchive {
     ) -> Result<(), DeployError> {
         let deploy_path = self.deploy_path.as_ref().ok_or(DeployError::IsBareArchive)?;
 
-        let target_path = target_path.to_logical_path(deploy_path);
-        if !target_path.starts_with(deploy_path) || &target_path == deploy_path {
-            return Err(DeployError::InvalidPath(target_path));
-        }
+        let target_path = {
+            let full_target_path = target_path.to_logical_path(deploy_path);
+            if !full_target_path.starts_with(deploy_path) || &full_target_path == deploy_path {
+                return Err(DeployError::InvalidPath(target_path.to_owned()));
+            }
+            full_target_path
+        };
 
         match target_path.symlink_metadata() {
             Ok(_) => return Err(DeployError::AlreadyExists(target_path)),
@@ -243,8 +246,8 @@ pub enum DeployError {
         to: PathBuf,
         source: io::Error,
     },
-    #[error("target path '{0}' is empty or not relative")]
-    InvalidPath(PathBuf),
+    #[error("target path '{0}' is empty, not relative, or outside of the media archive")]
+    InvalidPath(RelativePathBuf),
     #[error("cannot deploy in bare media archive")]
     IsBareArchive,
     #[error("failed to get file metadata of file '{path}': {source}")]
