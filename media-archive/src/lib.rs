@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use prae::Wrapper;
 use relative_path::{PathExt, RelativePath, RelativePathBuf};
 use thiserror::Error;
-use tracing::info;
+use tracing::{info, warn};
 
 pub use crate::file_hash::FileHash;
 
@@ -117,9 +117,20 @@ impl MediaArchive {
         fs::create_dir_all(parent).map_err(StoreFileError::CreateParentDir)?;
 
         if move_file {
-            fs::rename(path, target_path).map_err(StoreFileError::Store)?;
+            fs::rename(path, &target_path).map_err(StoreFileError::Store)?;
         } else {
-            reflink_copy::reflink_or_copy(path, target_path).map_err(StoreFileError::Store)?;
+            reflink_copy::reflink_or_copy(path, &target_path).map_err(StoreFileError::Store)?;
+        }
+
+        match fs::metadata(&target_path) {
+            Ok(metadata) => {
+                let mut permissions = metadata.permissions();
+                permissions.set_readonly(true);
+                if let Err(err) = fs::set_permissions(&target_path, permissions) {
+                    warn!("failed to set file '{}' as read only: {}", target_path.display(), err);
+                }
+            }
+            Err(err) => warn!("failed to get metadata of file '{}': {}", target_path.display(), err),
         }
 
         info!("stored file successfully");
