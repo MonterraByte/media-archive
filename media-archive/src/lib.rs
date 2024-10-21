@@ -24,6 +24,7 @@ use std::path::{Path, PathBuf};
 use prae::Wrapper;
 use relative_path::{PathExt, RelativePath, RelativePathBuf};
 use thiserror::Error;
+use tracing::info;
 
 pub use crate::file_hash::FileHash;
 
@@ -46,6 +47,7 @@ impl MediaArchive {
     /// and `path` will be the directory where media files are deployed to.
     /// If `bare` is true, no media files will be deployed, and `path`
     /// will be treated as the archive directory (similar to Git's bare repositories).
+    #[tracing::instrument(err)]
     pub fn open(path: PathBuf, bare: bool) -> Result<Self, OpenMediaArchiveError> {
         let (archive_path, deploy_path) = if bare {
             (path, None)
@@ -86,6 +88,7 @@ impl MediaArchive {
     /// this value after storing the file.
     ///
     /// If `move_file` is true, the file is moved instead.
+    #[tracing::instrument(skip(self), err)]
     pub fn store_file(&self, path: &Path, move_file: bool) -> Result<FileHash, StoreFileError> {
         let metadata = path.symlink_metadata().map_err(StoreFileError::Metadata)?;
         if metadata.is_dir() {
@@ -119,12 +122,14 @@ impl MediaArchive {
             reflink_copy::reflink_or_copy(path, target_path).map_err(StoreFileError::Store)?;
         }
 
+        info!("stored file successfully");
         Ok(hash)
     }
 
     /// Deploys a file with the given hash to the deployment directory.
     ///
     /// `target_path` is a relative path from the root of the deployment directory.
+    #[tracing::instrument(skip(self), err)]
     pub fn deploy_file(
         &self,
         hash: &FileHash,
@@ -199,7 +204,10 @@ impl MediaArchive {
         };
 
         match result {
-            Ok(()) => Ok(()),
+            Ok(()) => {
+                info!("deployed file successfully");
+                Ok(())
+            }
             Err(err) if err.kind() == io::ErrorKind::Unsupported => Err(DeployError::NotSupported),
             Err(err) => Err(DeployError::Deploy {
                 from: source_path,

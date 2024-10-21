@@ -4,3 +4,4 @@ members = ["media-archive"]
 
 [workspace.dependencies]
 thiserror = "1"
+tracing = "0.1"
