@@ -4,7 +4,7 @@ use std::str::FromStr;
 use arrayvec::ArrayString;
 use prae::Wrapper;
 
-const HASH_HEX_LEN: usize = blake3::OUT_LEN * 2;
+pub(crate) const HASH_HEX_LEN: usize = blake3::OUT_LEN * 2;
 prae::define! {
     #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
     pub FileHash: ArrayString<HASH_HEX_LEN>;

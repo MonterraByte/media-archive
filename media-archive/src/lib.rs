@@ -27,6 +27,7 @@ use thiserror::Error;
 use tracing::{info, warn};
 
 pub use crate::file_hash::FileHash;
+use crate::file_hash::HASH_HEX_LEN;
 
 const MEDIA_ARCHIVE_DIRECTORY: &str = ".media-archive";
 const STORE_DIRECTORY: &str = "store";
@@ -67,17 +68,23 @@ impl MediaArchive {
     /// The file does not need to exist.
     #[must_use]
     fn get_path_of_stored_file(&self, hash: &FileHash) -> PathBuf {
+        const SUBDIR_COUNT: usize = 2;
         const SUBDIR_NAME_LEN: usize = 2;
-        let subdir: &str = std::str::from_utf8(
-            hash.as_bytes()
-                .first_chunk::<SUBDIR_NAME_LEN>()
-                .expect("string is at least 2 bytes"),
-        )
-        .expect("string is ASCII");
+        const _: () = assert!(SUBDIR_COUNT * SUBDIR_NAME_LEN <= HASH_HEX_LEN);
 
         let mut path = self.archive_path.clone();
         path.push(STORE_DIRECTORY);
-        path.push(subdir);
+
+        let mut subdir_name_iterator = hash
+            .as_bytes()
+            .chunks_exact(SUBDIR_NAME_LEN)
+            .map(|chunk| std::str::from_utf8(chunk).expect("string is ASCII"));
+
+        for _ in 0..SUBDIR_COUNT {
+            let subdir = subdir_name_iterator.next().expect("hash length is big enough");
+            path.push(subdir);
+        }
+
         path.push::<&str>(hash.as_ref());
         path
     }
@@ -324,7 +331,7 @@ mod tests {
         let hash = FileHash::from_str(hash_str)?;
 
         let path = archive.get_path_of_stored_file(&hash);
-        let expected: PathBuf = [".", STORE_DIRECTORY, "00", hash_str].iter().collect();
+        let expected: PathBuf = [".", STORE_DIRECTORY, "00", "11", hash_str].iter().collect();
         assert_eq!(path, expected);
         Ok(())
     }
