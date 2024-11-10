@@ -309,45 +309,137 @@ mod tests {
     use super::*;
     use std::str::FromStr;
 
-    fn test_media_archive() -> MediaArchive {
-        MediaArchive {
-            archive_path: PathBuf::from("."),
-            deploy_path: None,
-        }
+    use assert_fs::fixture::ChildPath;
+    use assert_fs::prelude::*;
+    use assert_fs::TempDir;
+    use file_id::get_file_id;
+    use predicates::prelude::*;
+
+    fn temp_media_archive(bare: bool) -> (TempDir, MediaArchive) {
+        let temp_dir = TempDir::new().expect("failed to create temporary directory for test");
+        let archive = MediaArchive::open(temp_dir.to_path_buf(), bare).expect("failed to open media archive");
+        (temp_dir, archive)
     }
 
-    fn test_non_bare_media_archive() -> MediaArchive {
-        MediaArchive {
-            archive_path: PathBuf::from("archive"),
-            deploy_path: Some(PathBuf::from("deploy")),
-        }
+    #[test]
+    fn create_media_archive() {
+        let (temp_dir, _) = temp_media_archive(false);
+
+        temp_dir
+            .child(MEDIA_ARCHIVE_DIRECTORY)
+            .assert(predicate::path::is_dir());
+    }
+
+    #[test]
+    fn create_bare_media_archive() {
+        let (temp_dir, _) = temp_media_archive(true);
+
+        temp_dir
+            .child(MEDIA_ARCHIVE_DIRECTORY)
+            .assert(predicate::path::missing());
     }
 
     #[test]
     fn path_of_stored_file() -> Result<(), file_hash::FromStrError> {
-        let archive = test_media_archive();
+        let (temp_dir, archive) = temp_media_archive(true);
 
         let hash_str = "0011223344556677889900aabbccddeeff0011223344556677889900aabbccdd";
         let hash = FileHash::from_str(hash_str)?;
 
         let path = archive.get_path_of_stored_file(&hash);
-        let expected: PathBuf = [".", STORE_DIRECTORY, "00", "11", hash_str].iter().collect();
+        let expected = {
+            let mut path = temp_dir.to_path_buf();
+            path.push(STORE_DIRECTORY);
+            path.push("00");
+            path.push("11");
+            path.push(hash_str);
+            path
+        };
         assert_eq!(path, expected);
         Ok(())
     }
 
     #[test]
-    fn deploy_path_bare_archive() {
-        let archive = test_media_archive();
+    fn deploy_file_bare_archive() {
+        let (temp_dir, archive) = temp_media_archive(true);
+
         assert!(matches!(
             archive.deploy_file(&FileHash::zero(), RelativePath::new("test"), DeployMethod::Copy),
             Err(DeployError::IsBareArchive)
         ));
+        temp_dir.child("test").assert(predicate::path::missing());
+    }
+
+    fn deploy_file_first_part(method: DeployMethod) -> Result<(TempDir, ChildPath, ChildPath), DeployError> {
+        let (temp_dir, archive) = temp_media_archive(false);
+
+        const TEST_DATA: &str = "test data";
+        let stored_file = temp_dir
+            .child(MEDIA_ARCHIVE_DIRECTORY)
+            .child(STORE_DIRECTORY)
+            .child("00/00/0000000000000000000000000000000000000000000000000000000000000000");
+        stored_file.write_str(TEST_DATA).unwrap();
+
+        const DEPLOY_PATH: &str = "a/b/c";
+        archive.deploy_file(&FileHash::zero(), RelativePath::new(DEPLOY_PATH), method)?;
+
+        let deployed_file = temp_dir.child(DEPLOY_PATH);
+        deployed_file.assert(TEST_DATA);
+
+        Ok((temp_dir, stored_file, deployed_file))
     }
 
     #[test]
-    fn deploy_path_empty_path() {
-        let archive = test_non_bare_media_archive();
+    fn deploy_file_copy() {
+        let (_temp_dir, stored_file, deployed_file) =
+            deploy_file_first_part(DeployMethod::Copy).expect("failed to deploy file");
+
+        let deployed_file_metadata = deployed_file.symlink_metadata().unwrap();
+        assert!(!deployed_file_metadata.is_symlink());
+
+        #[cfg(any(target_family = "windows", target_family = "unix"))]
+        {
+            let stored_file_id = get_file_id(stored_file).unwrap();
+            let deployed_file_id = get_file_id(deployed_file).unwrap();
+            assert_ne!(stored_file_id, deployed_file_id);
+        }
+    }
+
+    #[test]
+    fn deploy_file_hardlink() {
+        let (_temp_dir, stored_file, deployed_file) =
+            deploy_file_first_part(DeployMethod::Hardlink).expect("failed to deploy file");
+
+        let deployed_file_metadata = deployed_file.symlink_metadata().unwrap();
+        assert!(!deployed_file_metadata.is_symlink());
+
+        #[cfg(any(target_family = "windows", target_family = "unix"))]
+        {
+            let stored_file_id = get_file_id(stored_file).unwrap();
+            let deployed_file_id = get_file_id(deployed_file).unwrap();
+            assert_eq!(stored_file_id, deployed_file_id);
+        }
+    }
+
+    #[test]
+    fn deploy_file_symlink() {
+        let (_temp_dir, _, deployed_file) = match deploy_file_first_part(DeployMethod::Symlink) {
+            Ok((t, s, d)) => (t, s, d),
+            Err(DeployError::NotSupported) => {
+                // Platform doesn't support symlinks, test should be skipped.
+                // However, Rust doesn't support skipping tests, so we'll just return.
+                return;
+            }
+            Err(err) => panic!("failed to deploy file: {}", err),
+        };
+
+        let deployed_file_metadata = deployed_file.symlink_metadata().unwrap();
+        assert!(deployed_file_metadata.is_symlink());
+    }
+
+    #[test]
+    fn deploy_file_empty_path() {
+        let (_temp_dir, archive) = temp_media_archive(false);
         assert!(matches!(
             archive.deploy_file(&FileHash::zero(), RelativePath::new(""), DeployMethod::Copy),
             Err(DeployError::InvalidPath(_))
@@ -355,8 +447,8 @@ mod tests {
     }
 
     #[test]
-    fn deploy_path_current_dir() {
-        let archive = test_non_bare_media_archive();
+    fn deploy_file_current_dir() {
+        let (_temp_dir, archive) = temp_media_archive(false);
         assert!(matches!(
             archive.deploy_file(&FileHash::zero(), RelativePath::new("."), DeployMethod::Copy),
             Err(DeployError::InvalidPath(_))
@@ -364,8 +456,8 @@ mod tests {
     }
 
     #[test]
-    fn deploy_path_escape() {
-        let archive = test_non_bare_media_archive();
+    fn deploy_file_escape() {
+        let (_temp_dir, archive) = temp_media_archive(false);
         assert!(matches!(
             archive.deploy_file(
                 &FileHash::zero(),

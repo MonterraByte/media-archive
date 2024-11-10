@@ -11,3 +11,8 @@ reflink-copy = "0.1"
 relative-path = "1.9"
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+[dev-dependencies]
+assert_fs = "1.1"
+file-id = "0.2"
+predicates = "3.1"
