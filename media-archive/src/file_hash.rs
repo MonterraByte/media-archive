@@ -19,8 +19,8 @@ impl FileHash {
     }
 
     #[cfg(test)]
-    pub(crate) fn zero_filled() -> Self {
-        Self(ArrayString::<HASH_HEX_LEN>::zero_filled())
+    pub(crate) fn zero() -> Self {
+        Self(ArrayString::<HASH_HEX_LEN>::from_byte_string(&[b'0'; 64]).expect("b'0' to be valid UTF-8"))
     }
 }
 

@@ -340,7 +340,7 @@ mod tests {
     fn deploy_path_bare_archive() {
         let archive = test_media_archive();
         assert!(matches!(
-            archive.deploy_file(&FileHash::zero_filled(), RelativePath::new("test"), DeployMethod::Copy),
+            archive.deploy_file(&FileHash::zero(), RelativePath::new("test"), DeployMethod::Copy),
             Err(DeployError::IsBareArchive)
         ));
     }
@@ -349,7 +349,7 @@ mod tests {
     fn deploy_path_empty_path() {
         let archive = test_non_bare_media_archive();
         assert!(matches!(
-            archive.deploy_file(&FileHash::zero_filled(), RelativePath::new(""), DeployMethod::Copy),
+            archive.deploy_file(&FileHash::zero(), RelativePath::new(""), DeployMethod::Copy),
             Err(DeployError::InvalidPath(_))
         ));
     }
@@ -358,7 +358,7 @@ mod tests {
     fn deploy_path_current_dir() {
         let archive = test_non_bare_media_archive();
         assert!(matches!(
-            archive.deploy_file(&FileHash::zero_filled(), RelativePath::new("."), DeployMethod::Copy),
+            archive.deploy_file(&FileHash::zero(), RelativePath::new("."), DeployMethod::Copy),
             Err(DeployError::InvalidPath(_))
         ));
     }
@@ -368,7 +368,7 @@ mod tests {
         let archive = test_non_bare_media_archive();
         assert!(matches!(
             archive.deploy_file(
-                &FileHash::zero_filled(),
+                &FileHash::zero(),
                 RelativePath::new("test/../../important-file"),
                 DeployMethod::Copy
             ),
