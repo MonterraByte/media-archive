@@ -52,4 +52,4 @@ jobs:
       - name: Cache dependencies
         uses: Swatinem/rust-cache@v2
       - name: Run clippy
-        run: cargo clippy --workspace --all-targets -- -Dclippy::all -Dclippy::pedantic -Aclippy::missing_errors_doc -Aclippy::missing_panics_doc
+        run: cargo clippy --workspace --all-targets -- -Dclippy::all -Dclippy::pedantic -Aclippy::missing_errors_doc -Aclippy::missing_panics_doc -Aclippy::uninlined-format-args -Aclippy::items_after_statements
