@@ -18,6 +18,11 @@ impl FileHash {
         self.0.as_bytes()
     }
 
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
     #[cfg(test)]
     pub(crate) fn zero() -> Self {
         Self(ArrayString::<HASH_HEX_LEN>::from_byte_string(&[b'0'; 64]).expect("b'0' to be valid UTF-8"))

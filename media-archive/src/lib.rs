@@ -84,7 +84,7 @@ impl MediaArchive {
             path.push(subdir);
         }
 
-        path.push::<&str>(hash.as_ref());
+        path.push(hash.as_str());
         path
     }
 
@@ -330,7 +330,7 @@ mod tests {
 
     use assert_fs::fixture::ChildPath;
     use assert_fs::prelude::*;
-    use assert_fs::TempDir;
+    use assert_fs::{NamedTempFile, TempDir};
     use file_id::get_file_id;
     use predicates::prelude::*;
 
@@ -384,6 +384,132 @@ mod tests {
         Ok(())
     }
 
+    const TEST_DATA: &str = "test data";
+    const TEST_DATA_HASH: &str = "6a953581d60dbebc9749b56d2383277fb02b58d260b4ccf6f119108fa0f1d4ef";
+
+    #[allow(clippy::type_complexity)]
+    fn store_file_first_part(
+        method: StoreMethod,
+        setup_fn: Option<Box<dyn Fn(&TempDir, &NamedTempFile)>>,
+    ) -> (NamedTempFile, Result<(), StoreFileError>) {
+        let (temp_dir, archive) = temp_media_archive(DiskStructure::Bare);
+
+        let file_to_store = NamedTempFile::new("test.txt").unwrap();
+        file_to_store.write_str(TEST_DATA).unwrap();
+
+        if let Some(setup_fn) = setup_fn {
+            setup_fn(&temp_dir, &file_to_store);
+        }
+
+        let returned_hash = match archive.store_file(file_to_store.path(), method) {
+            Ok(hash) => hash,
+            Err(err) => return (file_to_store, Err(err)),
+        };
+        assert_eq!(returned_hash.as_str(), TEST_DATA_HASH);
+
+        let stored_file = temp_dir
+            .child(STORE_DIRECTORY)
+            .child("6a")
+            .child("95")
+            .child(TEST_DATA_HASH);
+
+        let stored_file_metadata = stored_file.symlink_metadata().unwrap();
+        assert!(stored_file_metadata.is_file());
+        assert!(!stored_file_metadata.is_symlink());
+        assert!(stored_file_metadata.permissions().readonly());
+
+        stored_file.assert(TEST_DATA);
+
+        (file_to_store, Ok(()))
+    }
+
+    #[test]
+    fn store_file_copy() {
+        let (file_to_store, result) = store_file_first_part(StoreMethod::Copy, None);
+        assert!(matches!(result, Ok(())));
+        file_to_store.assert(predicate::path::exists());
+    }
+
+    #[test]
+    fn store_file_move() {
+        let (file_to_store, result) = store_file_first_part(StoreMethod::Move, None);
+        assert!(matches!(result, Ok(())));
+        file_to_store.assert(predicate::path::missing());
+    }
+
+    #[test]
+    fn store_file_already_exists() {
+        let (file_to_store, result) = store_file_first_part(
+            StoreMethod::Move,
+            Some(Box::new(|temp_dir, _| {
+                temp_dir
+                    .child(STORE_DIRECTORY)
+                    .child("6a")
+                    .child("95")
+                    .child(TEST_DATA_HASH)
+                    .touch()
+                    .unwrap();
+            })),
+        );
+        assert!(matches!(result, Err(StoreFileError::AlreadyExists(_))));
+        file_to_store.assert(predicate::path::exists());
+    }
+
+    #[test]
+    fn store_file_is_directory() {
+        let (_, result) = store_file_first_part(
+            StoreMethod::Copy,
+            Some(Box::new(|_, file_to_store| {
+                fs::remove_file(file_to_store).unwrap();
+                fs::create_dir(file_to_store).unwrap();
+            })),
+        );
+        assert!(matches!(result, Err(StoreFileError::IsDirectory)));
+    }
+
+    #[test]
+    fn store_file_is_directory_behind_symlink() {
+        let (_, result) = store_file_first_part(
+            StoreMethod::Copy,
+            Some(Box::new(|_, file_to_store| {
+                let symlink_target_path = file_to_store.parent().unwrap().join("actual_file.txt");
+                fs::remove_file(file_to_store).unwrap();
+                fs::create_dir(&symlink_target_path).unwrap();
+                #[cfg(target_family = "unix")]
+                std::os::unix::fs::symlink(&symlink_target_path, file_to_store).unwrap();
+                #[cfg(target_family = "windows")]
+                std::os::windows::fs::symlink_dir(&symlink_target_path, file_to_store).unwrap();
+                #[cfg(not(any(target_family = "unix", target_family = "windows")))]
+                unimplemented!();
+            })),
+        );
+        assert!(matches!(result, Err(StoreFileError::IsDirectory)));
+    }
+
+    fn store_file_symlink_setup(_: &TempDir, file_to_store: &NamedTempFile) {
+        let symlink_target_path = file_to_store.parent().unwrap().join("actual_file.txt");
+        fs::rename(file_to_store, &symlink_target_path).unwrap();
+        #[cfg(target_family = "unix")]
+        std::os::unix::fs::symlink(&symlink_target_path, file_to_store).unwrap();
+        #[cfg(target_family = "windows")]
+        std::os::windows::fs::symlink_file(&symlink_target_path, file_to_store).unwrap();
+        #[cfg(not(any(target_family = "unix", target_family = "windows")))]
+        unimplemented!();
+    }
+
+    #[test]
+    #[cfg(any(target_family = "unix", target_family = "windows"))]
+    fn store_file_copy_symlink() {
+        let (_, result) = store_file_first_part(StoreMethod::Copy, Some(Box::new(store_file_symlink_setup)));
+        assert!(matches!(result, Ok(())));
+    }
+
+    #[test]
+    fn store_file_move_symlink() {
+        let (_, result) = store_file_first_part(StoreMethod::Move, Some(Box::new(store_file_symlink_setup)));
+        assert!(matches!(result, Err(StoreFileError::IsSymlink)));
+    }
+
     #[test]
     fn deploy_file_bare_archive() {
         let (temp_dir, archive) = temp_media_archive(DiskStructure::Bare);
@@ -395,10 +521,11 @@ mod tests {
         temp_dir.child("test").assert(predicate::path::missing());
     }
 
-    fn deploy_file_first_part(method: DeployMethod) -> Result<(TempDir, ChildPath, ChildPath), DeployError> {
-        let (temp_dir, archive) = temp_media_archive(DiskStructure::Deployable);
-
-        const TEST_DATA: &str = "test data";
+    fn deploy_file_first_part(
+        temp_dir: &TempDir,
+        archive: &MediaArchive,
+        method: DeployMethod,
+    ) -> Result<(ChildPath, ChildPath), DeployError> {
         let stored_file = temp_dir
             .child(MEDIA_ARCHIVE_DIRECTORY)
             .child(STORE_DIRECTORY)
@@ -411,13 +538,14 @@ mod tests {
         let deployed_file = temp_dir.child(DEPLOY_PATH);
         deployed_file.assert(TEST_DATA);
 
-        Ok((temp_dir, stored_file, deployed_file))
+        Ok((stored_file, deployed_file))
     }
 
     #[test]
     fn deploy_file_copy() {
-        let (_temp_dir, stored_file, deployed_file) =
-            deploy_file_first_part(DeployMethod::Copy).expect("failed to deploy file");
+        let (temp_dir, archive) = temp_media_archive(DiskStructure::Deployable);
+        let (stored_file, deployed_file) =
+            deploy_file_first_part(&temp_dir, &archive, DeployMethod::Copy).expect("failed to deploy file");
 
         let deployed_file_metadata = deployed_file.symlink_metadata().unwrap();
         assert!(!deployed_file_metadata.is_symlink());
@@ -432,8 +560,9 @@ mod tests {
 
     #[test]
     fn deploy_file_hardlink() {
-        let (_temp_dir, stored_file, deployed_file) =
-            deploy_file_first_part(DeployMethod::Hardlink).expect("failed to deploy file");
+        let (temp_dir, archive) = temp_media_archive(DiskStructure::Deployable);
+        let (stored_file, deployed_file) =
+            deploy_file_first_part(&temp_dir, &archive, DeployMethod::Hardlink).expect("failed to deploy file");
 
         let deployed_file_metadata = deployed_file.symlink_metadata().unwrap();
         assert!(!deployed_file_metadata.is_symlink());
@@ -448,8 +577,9 @@ mod tests {
 
     #[test]
     fn deploy_file_symlink() {
-        let (_temp_dir, _, deployed_file) = match deploy_file_first_part(DeployMethod::Symlink) {
-            Ok((t, s, d)) => (t, s, d),
+        let (temp_dir, archive) = temp_media_archive(DiskStructure::Deployable);
+        let (_, deployed_file) = match deploy_file_first_part(&temp_dir, &archive, DeployMethod::Symlink) {
+            Ok((s, d)) => (s, d),
             Err(DeployError::NotSupported) => {
                 // Platform doesn't support symlinks, test should be skipped.
                 // However, Rust doesn't support skipping tests, so we'll just return.
@@ -460,6 +590,17 @@ mod tests {
 
         let deployed_file_metadata = deployed_file.symlink_metadata().unwrap();
         assert!(deployed_file_metadata.is_symlink());
+    }
+
+    #[test]
+    fn deploy_file_already_exists() {
+        let (temp_dir, archive) = temp_media_archive(DiskStructure::Deployable);
+        temp_dir.child("a/b/c").touch().unwrap();
+
+        assert!(matches!(
+            deploy_file_first_part(&temp_dir, &archive, DeployMethod::Copy),
+            Err(DeployError::AlreadyExists(_))
+        ));
     }
 
     #[test]
