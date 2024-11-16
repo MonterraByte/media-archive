@@ -333,7 +333,10 @@ mod tests {
 
     #[test]
     fn create_media_archive() {
-        let (temp_dir, _) = temp_media_archive(DiskStructure::Deployable);
+        let (temp_dir, archive) = temp_media_archive(DiskStructure::Deployable);
+
+        assert_eq!(archive.deploy_path.as_deref(), Some(temp_dir.path()));
+        assert_eq!(archive.archive_path, temp_dir.child(MEDIA_ARCHIVE_DIRECTORY).path());
 
         temp_dir
             .child(MEDIA_ARCHIVE_DIRECTORY)
@@ -342,7 +345,10 @@ mod tests {
 
     #[test]
     fn create_bare_media_archive() {
-        let (temp_dir, _) = temp_media_archive(DiskStructure::Bare);
+        let (temp_dir, archive) = temp_media_archive(DiskStructure::Bare);
+
+        assert_eq!(archive.deploy_path, None);
+        assert_eq!(archive.archive_path, temp_dir.path());
 
         temp_dir
             .child(MEDIA_ARCHIVE_DIRECTORY)
