@@ -92,15 +92,13 @@ impl MediaArchive {
     ///
     /// Files in the archive are identified by their hash value, and this function will return
     /// this value after storing the file.
-    ///
-    /// If `move_file` is true, the file is moved instead.
     #[tracing::instrument(skip(self), err)]
-    pub fn store_file(&self, path: &Path, move_file: bool) -> Result<FileHash, StoreFileError> {
+    pub fn store_file(&self, path: &Path, method: StoreMethod) -> Result<FileHash, StoreFileError> {
         let metadata = path.symlink_metadata().map_err(StoreFileError::Metadata)?;
         if metadata.is_dir() {
             return Err(StoreFileError::IsDirectory);
         }
-        if metadata.is_symlink() && move_file {
+        if metadata.is_symlink() && method == StoreMethod::Move {
             return Err(StoreFileError::IsSymlink);
         }
         if metadata.is_symlink() && path.metadata().map_err(StoreFileError::Metadata)?.is_dir() {
@@ -122,10 +120,13 @@ impl MediaArchive {
         let parent = target_path.parent().expect("target path should have a parent");
         fs::create_dir_all(parent).map_err(StoreFileError::CreateParentDir)?;
 
-        if move_file {
-            fs::rename(path, &target_path).map_err(StoreFileError::Store)?;
-        } else {
-            reflink_copy::reflink_or_copy(path, &target_path).map_err(StoreFileError::Store)?;
+        match method {
+            StoreMethod::Copy => {
+                reflink_copy::reflink_or_copy(path, &target_path).map_err(StoreFileError::Store)?;
+            }
+            StoreMethod::Move => {
+                fs::rename(path, &target_path).map_err(StoreFileError::Store)?;
+            }
         }
 
         match fs::metadata(&target_path) {
@@ -244,6 +245,14 @@ pub enum DiskStructure {
     /// The base directory will be to where files are deployed,
     /// and the media archive's files will be stored in a subdirectory.
     Deployable,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum StoreMethod {
+    /// The file is copied to the store.
+    Copy,
+    /// The file is moved to the store.
+    Move,
 }
 
 #[derive(Copy, Clone, Debug)]
