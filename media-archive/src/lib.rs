@@ -44,16 +44,15 @@ impl MediaArchive {
     /// The directory will be created if it doesn't already exist,
     /// and so will any needed media archive files.
     ///
-    /// By default, an archive directory will be created inside `path`,
+    /// If `disk_structure` is [`DiskStructure::Deployable`], an archive directory will be created inside `path`,
     /// and `path` will be the directory where media files are deployed to.
-    /// If `bare` is true, no media files will be deployed, and `path`
+    /// If `disk_structure` is [`DiskStructure::Bare`], no media files will be deployed, and `path`
     /// will be treated as the archive directory (similar to Git's bare repositories).
     #[tracing::instrument(err)]
-    pub fn open(path: PathBuf, bare: bool) -> Result<Self, OpenMediaArchiveError> {
-        let (archive_path, deploy_path) = if bare {
-            (path, None)
-        } else {
-            (path.join(MEDIA_ARCHIVE_DIRECTORY), Some(path))
+    pub fn open(path: PathBuf, disk_structure: DiskStructure) -> Result<Self, OpenMediaArchiveError> {
+        let (archive_path, deploy_path) = match disk_structure {
+            DiskStructure::Bare => (path, None),
+            DiskStructure::Deployable => (path.join(MEDIA_ARCHIVE_DIRECTORY), Some(path)),
         };
         fs::create_dir_all(&archive_path).map_err(OpenMediaArchiveError::CreateDir)?;
 
@@ -237,6 +236,17 @@ impl MediaArchive {
 }
 
 #[derive(Copy, Clone, Debug)]
+pub enum DiskStructure {
+    /// A media archive that doesn't support deploying files.
+    Bare,
+    /// A media archive that supports deploying files for offline browsing.
+    ///
+    /// The base directory will be to where files are deployed,
+    /// and the media archive's files will be stored in a subdirectory.
+    Deployable,
+}
+
+#[derive(Copy, Clone, Debug)]
 pub enum DeployMethod {
     /// The file is copied to the destination.
     Copy,
@@ -315,15 +325,15 @@ mod tests {
     use file_id::get_file_id;
     use predicates::prelude::*;
 
-    fn temp_media_archive(bare: bool) -> (TempDir, MediaArchive) {
+    fn temp_media_archive(disk_structure: DiskStructure) -> (TempDir, MediaArchive) {
         let temp_dir = TempDir::new().expect("failed to create temporary directory for test");
-        let archive = MediaArchive::open(temp_dir.to_path_buf(), bare).expect("failed to open media archive");
+        let archive = MediaArchive::open(temp_dir.to_path_buf(), disk_structure).expect("failed to open media archive");
         (temp_dir, archive)
     }
 
     #[test]
     fn create_media_archive() {
-        let (temp_dir, _) = temp_media_archive(false);
+        let (temp_dir, _) = temp_media_archive(DiskStructure::Deployable);
 
         temp_dir
             .child(MEDIA_ARCHIVE_DIRECTORY)
@@ -332,7 +342,7 @@ mod tests {
 
     #[test]
     fn create_bare_media_archive() {
-        let (temp_dir, _) = temp_media_archive(true);
+        let (temp_dir, _) = temp_media_archive(DiskStructure::Bare);
 
         temp_dir
             .child(MEDIA_ARCHIVE_DIRECTORY)
@@ -341,7 +351,7 @@ mod tests {
 
     #[test]
     fn path_of_stored_file() -> Result<(), file_hash::FromStrError> {
-        let (temp_dir, archive) = temp_media_archive(true);
+        let (temp_dir, archive) = temp_media_archive(DiskStructure::Bare);
 
         let hash_str = "0011223344556677889900aabbccddeeff0011223344556677889900aabbccdd";
         let hash = FileHash::from_str(hash_str)?;
@@ -361,7 +371,7 @@ mod tests {
 
     #[test]
     fn deploy_file_bare_archive() {
-        let (temp_dir, archive) = temp_media_archive(true);
+        let (temp_dir, archive) = temp_media_archive(DiskStructure::Bare);
 
         assert!(matches!(
             archive.deploy_file(&FileHash::zero(), RelativePath::new("test"), DeployMethod::Copy),
@@ -371,7 +381,7 @@ mod tests {
     }
 
     fn deploy_file_first_part(method: DeployMethod) -> Result<(TempDir, ChildPath, ChildPath), DeployError> {
-        let (temp_dir, archive) = temp_media_archive(false);
+        let (temp_dir, archive) = temp_media_archive(DiskStructure::Deployable);
 
         const TEST_DATA: &str = "test data";
         let stored_file = temp_dir
@@ -439,7 +449,7 @@ mod tests {
 
     #[test]
     fn deploy_file_empty_path() {
-        let (_temp_dir, archive) = temp_media_archive(false);
+        let (_temp_dir, archive) = temp_media_archive(DiskStructure::Deployable);
         assert!(matches!(
             archive.deploy_file(&FileHash::zero(), RelativePath::new(""), DeployMethod::Copy),
             Err(DeployError::InvalidPath(_))
@@ -448,7 +458,7 @@ mod tests {
 
     #[test]
     fn deploy_file_current_dir() {
-        let (_temp_dir, archive) = temp_media_archive(false);
+        let (_temp_dir, archive) = temp_media_archive(DiskStructure::Deployable);
         assert!(matches!(
             archive.deploy_file(&FileHash::zero(), RelativePath::new("."), DeployMethod::Copy),
             Err(DeployError::InvalidPath(_))
@@ -457,7 +467,7 @@ mod tests {
 
     #[test]
     fn deploy_file_escape() {
-        let (_temp_dir, archive) = temp_media_archive(false);
+        let (_temp_dir, archive) = temp_media_archive(DiskStructure::Deployable);
         assert!(matches!(
             archive.deploy_file(
                 &FileHash::zero(),
