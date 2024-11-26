@@ -233,11 +233,9 @@ checksum = "a7a70ba024b9dc04c27ea2f0c0548feb474ec5c54bba33a7f72f873a39d07b24"
 name = "media-archive"
 version = "0.1.0"
 dependencies = [
- "arrayvec",
  "assert_fs",
  "blake3",
  "file-id",
- "prae",
  "predicates",
  "reflink-copy",
  "relative-path",
@@ -277,12 +275,6 @@ name = "pin-project-lite"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "915a1e146535de9163f3987b8944ed8cf49a18bb0056bcebcdcece385cece4ff"
-
-[[package]]
-name = "prae"
-version = "0.8.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d7607ff6209813b9ab50388773a4c6586556d0edc186990a8705d014dd73ff47"
 
 [[package]]
 name = "predicates"

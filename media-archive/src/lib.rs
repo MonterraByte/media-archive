@@ -15,19 +15,15 @@
 
 #![forbid(unsafe_code)]
 
-mod file_hash;
-
 use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 
-use prae::Wrapper;
 use relative_path::{PathExt, RelativePath, RelativePathBuf};
 use thiserror::Error;
 use tracing::{info, warn};
 
-pub use crate::file_hash::FileHash;
-use crate::file_hash::HASH_HEX_LEN;
+pub use blake3::Hash;
 
 const MEDIA_ARCHIVE_DIRECTORY: &str = ".media-archive";
 const STORE_DIRECTORY: &str = "store";
@@ -66,11 +62,12 @@ impl MediaArchive {
     ///
     /// The file does not need to exist.
     #[must_use]
-    fn get_path_of_stored_file(&self, hash: &FileHash) -> PathBuf {
+    fn get_path_of_stored_file(&self, hash: &Hash) -> PathBuf {
         const SUBDIR_COUNT: usize = 2;
         const SUBDIR_NAME_LEN: usize = 2;
-        const _: () = assert!(SUBDIR_COUNT * SUBDIR_NAME_LEN <= HASH_HEX_LEN);
+        const _: () = assert!(SUBDIR_COUNT * SUBDIR_NAME_LEN <= blake3::OUT_LEN * 2);
 
+        let hash = hash.to_hex();
         let mut path = self.archive_path.clone();
         path.push(STORE_DIRECTORY);
 
@@ -93,7 +90,7 @@ impl MediaArchive {
     /// Files in the archive are identified by their hash value, and this function will return
     /// this value after storing the file.
     #[tracing::instrument(skip(self), err)]
-    pub fn store_file(&self, path: &Path, method: StoreMethod) -> Result<FileHash, StoreFileError> {
+    pub fn store_file(&self, path: &Path, method: StoreMethod) -> Result<Hash, StoreFileError> {
         let metadata = path.symlink_metadata().map_err(StoreFileError::Metadata)?;
         if metadata.is_dir() {
             return Err(StoreFileError::IsDirectory);
@@ -109,7 +106,7 @@ impl MediaArchive {
             let file = File::open(path).map_err(StoreFileError::Open)?;
             let mut hasher = blake3::Hasher::new();
             hasher.update_reader(file).map_err(StoreFileError::Read)?;
-            FileHash::new(hasher.finalize().to_hex()).expect("hash is a valid hash")
+            hasher.finalize()
         };
 
         let target_path = self.get_path_of_stored_file(&hash);
@@ -150,7 +147,7 @@ impl MediaArchive {
     #[tracing::instrument(skip(self), err)]
     pub fn deploy_file(
         &self,
-        hash: &FileHash,
+        hash: &Hash,
         target_path: &RelativePath,
         method: DeployMethod,
     ) -> Result<(), DeployError> {
@@ -274,7 +271,7 @@ pub enum OpenMediaArchiveError {
 #[derive(Debug, Error)]
 pub enum StoreFileError {
     #[error("file with hash '{0}' already exists")]
-    AlreadyExists(FileHash),
+    AlreadyExists(Hash),
     #[error("cannot store a directory")]
     IsDirectory,
     #[error("cannot store a symlink")]
@@ -310,7 +307,7 @@ pub enum DeployError {
     #[error("failed to get file metadata of file '{path}': {source}")]
     Metadata { path: PathBuf, source: io::Error },
     #[error("file with hash '{0}' not found in the archive")]
-    NotFound(FileHash),
+    NotFound(Hash),
     #[error("deployment method not supported by the operating system or file system")]
     NotSupported,
     #[error("source '{0}' exists but is not a file")]
@@ -326,7 +323,6 @@ pub enum DeployError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::str::FromStr;
 
     use assert_fs::fixture::ChildPath;
     use assert_fs::prelude::*;
@@ -365,11 +361,11 @@ mod tests {
     }
 
     #[test]
-    fn path_of_stored_file() -> Result<(), file_hash::FromStrError> {
+    fn path_of_stored_file() {
         let (temp_dir, archive) = temp_media_archive(DiskStructure::Bare);
 
         let hash_str = "0011223344556677889900aabbccddeeff0011223344556677889900aabbccdd";
-        let hash = FileHash::from_str(hash_str)?;
+        let hash = Hash::from_hex(hash_str).unwrap();
 
         let path = archive.get_path_of_stored_file(&hash);
         let expected = {
@@ -381,11 +377,11 @@ mod tests {
             path
         };
         assert_eq!(path, expected);
-        Ok(())
     }
 
     const TEST_DATA: &str = "test data";
     const TEST_DATA_HASH: &str = "6a953581d60dbebc9749b56d2383277fb02b58d260b4ccf6f119108fa0f1d4ef";
+    const ZERO_HASH: Hash = Hash::from_bytes([0; 32]);
 
     #[allow(clippy::type_complexity)]
     fn store_file_first_part(
@@ -405,7 +401,7 @@ mod tests {
             Ok(hash) => hash,
             Err(err) => return (file_to_store, Err(err)),
         };
-        assert_eq!(returned_hash.as_str(), TEST_DATA_HASH);
+        assert_eq!(returned_hash.to_hex().as_str(), TEST_DATA_HASH);
 
         let stored_file = temp_dir
             .child(STORE_DIRECTORY)
@@ -515,7 +511,7 @@ mod tests {
         let (temp_dir, archive) = temp_media_archive(DiskStructure::Bare);
 
         assert!(matches!(
-            archive.deploy_file(&FileHash::zero(), RelativePath::new("test"), DeployMethod::Copy),
+            archive.deploy_file(&ZERO_HASH, RelativePath::new("test"), DeployMethod::Copy),
             Err(DeployError::IsBareArchive)
         ));
         temp_dir.child("test").assert(predicate::path::missing());
@@ -533,7 +529,7 @@ mod tests {
         stored_file.write_str(TEST_DATA).unwrap();
 
         const DEPLOY_PATH: &str = "a/b/c";
-        archive.deploy_file(&FileHash::zero(), RelativePath::new(DEPLOY_PATH), method)?;
+        archive.deploy_file(&ZERO_HASH, RelativePath::new(DEPLOY_PATH), method)?;
 
         let deployed_file = temp_dir.child(DEPLOY_PATH);
         deployed_file.assert(TEST_DATA);
@@ -607,7 +603,7 @@ mod tests {
     fn deploy_file_empty_path() {
         let (_temp_dir, archive) = temp_media_archive(DiskStructure::Deployable);
         assert!(matches!(
-            archive.deploy_file(&FileHash::zero(), RelativePath::new(""), DeployMethod::Copy),
+            archive.deploy_file(&ZERO_HASH, RelativePath::new(""), DeployMethod::Copy),
             Err(DeployError::InvalidPath(_))
         ));
     }
@@ -616,7 +612,7 @@ mod tests {
     fn deploy_file_current_dir() {
         let (_temp_dir, archive) = temp_media_archive(DiskStructure::Deployable);
         assert!(matches!(
-            archive.deploy_file(&FileHash::zero(), RelativePath::new("."), DeployMethod::Copy),
+            archive.deploy_file(&ZERO_HASH, RelativePath::new("."), DeployMethod::Copy),
             Err(DeployError::InvalidPath(_))
         ));
     }
@@ -626,7 +622,7 @@ mod tests {
         let (_temp_dir, archive) = temp_media_archive(DiskStructure::Deployable);
         assert!(matches!(
             archive.deploy_file(
-                &FileHash::zero(),
+                &ZERO_HASH,
                 RelativePath::new("test/../../important-file"),
                 DeployMethod::Copy
             ),
